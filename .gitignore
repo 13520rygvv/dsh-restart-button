@@ -1,0 +1,6 @@
+# runtime diagnostics written by the relaunch scripts
+launch.log
+orchestrator.log
+blocked.json
+client-report.log
+selftest/

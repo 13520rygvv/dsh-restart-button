@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "Restart from Settings",
+    "description": "Adds a Restart button to Settings → General that restarts the DeepSeek Harness desktop app."
+  }
+}

@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "设置里的重启按钮",
+    "description": "在设置 → 通用 中增加一个重启按钮，一键重新启动 DeepSeek Harness 桌面端。"
+  }
+}

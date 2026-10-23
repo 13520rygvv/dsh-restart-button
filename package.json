@@ -1,0 +1,36 @@
+{
+  "name": "@local/dsh-restart-button",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Adds a Restart button to Settings that restarts the DeepSeek Harness desktop app",
+  "exports": {
+    ".": "./index.js",
+    "./client": "./client.js",
+    "./locale/*.json": "./locale/*.json",
+    "./icon": "./icon.svg"
+  },
+  "files": [
+    "index.js",
+    "client.js",
+    "launch.ps1",
+    "restart.ps1",
+    "cordis.patch.yml",
+    "locale/*.json",
+    "icon.svg"
+  ],
+  "dsh": {
+    "bundle": { "patch": "./cordis.patch.yml" },
+    "client": {
+      "platform": "web",
+      "immediately": true,
+      "inject": [
+        "@deepseek-ai/dsh-client-ui-settings-general",
+        "@deepseek-ai/dsh-client-locale",
+        "@deepseek-ai/dsh-client-connection",
+        "@deepseek-ai/dsh-client-shortcuts",
+        "@deepseek-ai/dsh-client-ui-layout"
+      ]
+    }
+  }
+}
