@@ -453,33 +453,40 @@ window.__ModuleLoader__.load({
           locale: NS,
         }, RestartCard))
 
-        // The shortcut service is optional: a composition without it keeps the row.
+        // The shortcut service is optional, and it may activate after this
+        // plugin: register through inject so the command exists either way.
         // Defaults stay desktop-only because the Web profiles already bind
         // primary+alt+R to "refresh page".
-        const shortcuts = ctx.get('shortcuts')
-        if (shortcuts === undefined) return
-        try {
-          ctx.effect(() => shortcuts.register({
-            id: 'dsh-restart-button.restart',
-            label: () => copy('shortcut.label'),
-            aliases: ['restart', 'reboot'],
-            defaults: {
-              'desktop:windows': { code: 'KeyR', modifiers: ['primary', 'alt'] },
-              'desktop:macos': { code: 'KeyR', modifiers: ['primary', 'alt'] },
-              'desktop:linux': { code: 'KeyR', modifiers: ['primary', 'alt'] },
-            },
-            regions: ['page', 'editable', 'terminal'],
-            modals: ['settings'],
-            resolve: () => ({
-              status: 'handled',
-              run: () => {
-                void triggerRestart(false)
+        const register = (shortcuts) => {
+          try {
+            ctx.effect(() => shortcuts.register({
+              id: 'dsh-restart-button.restart',
+              label: () => copy('shortcut.label'),
+              aliases: ['restart', 'reboot'],
+              defaults: {
+                'desktop:windows': { code: 'KeyR', modifiers: ['primary', 'alt'] },
+                'desktop:macos': { code: 'KeyR', modifiers: ['primary', 'alt'] },
+                'desktop:linux': { code: 'KeyR', modifiers: ['primary', 'alt'] },
               },
-            }),
-          }), 'dsh-restart-button: restart shortcut')
-        } catch (error) {
-          console.warn('[dsh-restart-button] shortcut registration failed', error)
+              regions: ['page', 'editable', 'terminal'],
+              modals: ['settings'],
+              resolve: () => ({
+                status: 'handled',
+                run: () => {
+                  void triggerRestart(false)
+                },
+              }),
+            }), 'dsh-restart-button: restart shortcut')
+          } catch (error) {
+            console.warn('[dsh-restart-button] shortcut registration failed', error)
+          }
         }
+        const shortcuts = ctx.get('shortcuts')
+        if (shortcuts === undefined) {
+          ctx.inject(['shortcuts'], (scope) => register(scope.shortcuts))
+          return
+        }
+        register(shortcuts)
       },
     }
   },

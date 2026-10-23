@@ -218,6 +218,7 @@ async function answer(ctx, request) {
     return Response.json({ ok: false, error: 'request body is not JSON' }, { status: 400 })
   }
   const action = body !== null && typeof body === 'object' ? body.action : undefined
+
   const target = restartTarget()
   if (action === 'status') {
     const work = target.supported ? await workState(ctx) : { activeTasks: false, scheduledTasks: false, detail: {} }
@@ -262,6 +263,8 @@ async function answer(ctx, request) {
  * @param ctx - Host context; `connection` is required by {@link inject}.
  */
 export function apply(ctx) {
+  // TEMPORARY: prove this Host build is the one currently loaded.
+  import('node:fs/promises').then(({ writeFile }) => writeFile(join(packageDir, 'host-report.log'), `${new Date().toISOString()} host build with report action\n`).catch(() => {}))
   ctx.effect(() => ctx.connection.fetch.register({
     path: ROUTE,
     methods: ['POST'],
@@ -269,3 +272,4 @@ export function apply(ctx) {
     fetch: (request) => answer(ctx, request),
   }), 'dsh-restart-button: restart route')
 }
+
