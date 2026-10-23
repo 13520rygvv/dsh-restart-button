@@ -47,6 +47,7 @@ window.__ModuleLoader__.load({
       'unsupported': '当前环境不支持一键重启，仅 Windows 桌面版可用。',
       'stalled': '重启没有完成，请重试或手动重启应用。',
       'shortcut.label': '重启 DeepSeek Harness',
+      'menu.restart': '重启',
     }
 
     /** English copy. */
@@ -66,6 +67,7 @@ window.__ModuleLoader__.load({
       'unsupported': 'One-click restart is only available in the Windows desktop app.',
       'stalled': 'The restart did not complete. Try again, or restart the app manually.',
       'shortcut.label': 'Restart DeepSeek Harness',
+      'menu.restart': 'Restart',
     }
 
     /**
@@ -342,6 +344,64 @@ window.__ModuleLoader__.load({
         ]))
     }
 
+    /** Restart glyph for the account-menu row; the menu item inherits its color. */
+    const RESTART_ICON = '<svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true" focusable="false"><path d="M13 8a5 5 0 1 1-1.46-3.54" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/><path d="M13.2 2.6v3.4h-3.4" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>'
+
+    /**
+     * Replace the first text node matching `pattern`.
+     * @param root - cloned menu item.
+     * @param pattern - label matcher.
+     * @param next - replacement label.
+     */
+    function replaceLabel(root, pattern, next) {
+      const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT)
+      let node = walker.nextNode()
+      while (node !== null) {
+        if (pattern.test(node.nodeValue ?? '')) {
+          node.nodeValue = next
+          return
+        }
+        node = walker.nextNode()
+      }
+      root.append(document.createTextNode(next))
+    }
+
+    /**
+     * Add a Restart row above "Sign out" in the account popover.
+     *
+     * The shipped account menu renders a fixed item list and exposes no slot
+     * for extra entries, so this clones its sign-out row — keeping the native
+     * classes, icon slot, and hover state — and swaps the label, icon, and
+     * click behavior. A DSH update that changes that menu makes this row
+     * disappear; nothing else breaks.
+     * @returns nothing; every open account menu receives the row.
+     */
+    function injectAccountRestart() {
+      for (const menu of document.querySelectorAll('[role="menu"]')) {
+        if (menu.querySelector('[data-dsh-restart-menu]') !== null) continue
+        const items = Array.from(menu.querySelectorAll('[role="menuitem"]'))
+        const signOut = items.find((node) => /退出登录|sign out/i.test(node.textContent ?? ''))
+        if (signOut === undefined || signOut.parentElement === null) continue
+        const item = signOut.cloneNode(true)
+        item.removeAttribute('id')
+        item.removeAttribute('disabled')
+        item.removeAttribute('aria-disabled')
+        item.removeAttribute('aria-expanded')
+        item.setAttribute('data-dsh-restart-menu', '1')
+        const label = copy('menu.restart')
+        item.setAttribute('aria-label', label)
+        replaceLabel(item, /退出登录|sign out/i, label)
+        const icon = item.querySelector('svg')
+        if (icon !== null) icon.outerHTML = RESTART_ICON
+        item.addEventListener('click', (event) => {
+          event.preventDefault()
+          event.stopPropagation()
+          void triggerRestart(false)
+        })
+        signOut.parentElement.insertBefore(item, signOut)
+      }
+    }
+
     return {
       inject: ['slots', 'locale'],
       apply(ctx) {
@@ -359,6 +419,25 @@ window.__ModuleLoader__.load({
         }, 'dsh-restart-button: styles')
 
         ctx.effect(() => ctx.locale.register(NS, { zh, en }), 'dsh-restart-button: dictionaries')
+
+        ctx.effect(() => {
+          let scheduled = false
+          const schedule = () => {
+            if (scheduled) return
+            scheduled = true
+            requestAnimationFrame(() => {
+              scheduled = false
+              injectAccountRestart()
+            })
+          }
+          const observer = new MutationObserver(schedule)
+          observer.observe(document.body, { childList: true, subtree: true })
+          schedule()
+          return () => {
+            observer.disconnect()
+            for (const node of document.querySelectorAll('[data-dsh-restart-menu]')) node.remove()
+          }
+        }, 'dsh-restart-button: account menu entry')
 
         ctx.slots.inject('settings.general.item', () => ctx.slots.register({
           name: 'settings.general.item',
