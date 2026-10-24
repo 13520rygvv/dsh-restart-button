@@ -11,6 +11,7 @@
 - **左下角账号菜单**：点左下角头像 → 弹窗里在「退出登录」上方多一项「重启」（官方菜单没有插件扩展位，这一项是克隆官方菜单行实现的，见「已知限制」）。
 - **有任务时会先问**：仅当真的有进行中的任务（agent 正在生成/工具在跑、排队的用户消息、后台 job、挂起的定时任务）时，才会弹出确认卡片（Esc 取消）；空闲时一键直接走。
 - **优雅重启**：结束的是 Electron 外壳，宿主进程会因 IPC 断开自行完成关闭（会话日志正常落盘），然后重新启动应用。
+- **重启顺带安装已下载的更新**：DSH 的应用内更新由 electron-updater 下载到本地缓存；如果缓存里的安装包比当前版本新，点重启会先静默安装它再启动，不会出现「更新下载好了但装不上、得手动跑安装器」的情况。
 
 ## 安装
 
@@ -39,9 +40,11 @@ plugin_manager install_bundle  target = <本目录的绝对路径>
         └─ 宿主插件：判断是否有任务 → 需要确认就先回 needs-confirmation
              └─ spawn + await launch.ps1        （同步等交接完成）
                   └─ WMI Win32_Process.Create   （让重启脚本独立于宿主存活）
-                       └─ restart.ps1：结束 Electron 主进程
-                            → Host 感知 IPC 断开，自行优雅退出（会话落盘）
-                            → Start-Process 重新启动 DeepSeek Harness.exe
+                       └─ restart.ps1：更新缓存里有比当前版本新的安装包？
+                            → 是：静默运行它（/S --updated）并启动应用
+                            → 否：结束 Electron 主进程
+                                 → Host 感知 IPC 断开，自行优雅退出（会话落盘）
+                                 → Start-Process 重新启动 DeepSeek Harness.exe
 ```
 
 几个关键点：
@@ -49,6 +52,7 @@ plugin_manager install_bundle  target = <本目录的绝对路径>
 - 宿主进程用 `detached: true` 拉起的 PowerShell 会**直接退出且不执行脚本**（实测），所以改用 WMI 创建独立进程；
 - 判断「是否有任务」不能用 `agent.inbox.nextStep`：系统通知（例如权限变更提示）会滞留在 idle 会话里，导致永远误报；
 - 快捷键默认值只声明桌面端：Web 端的 `page.refresh`（刷新页面）已占用 `primary+alt+KeyR`。
+- 更新安装包存放在 `%LOCALAPPDATA%\@deepseek-aidsh-desktop-updater\installer.exe`；插件读取 `resources\app.asar` 里的版本号与它比较，只有安装包版本更高才执行安装。安装器若触发 UAC 会弹出授权框。
 
 ## 文件结构
 
@@ -57,7 +61,7 @@ plugin_manager install_bundle  target = <本目录的绝对路径>
 | `index.js` | 宿主半边：`/api/dsh-restart` 路由、任务检测、启动重启编排脚本 |
 | `client.js` | 页面半边：设置行、确认卡片、快捷键命令、文案字典 |
 | `launch.ps1` | 编排器：用 WMI 创建真正执行重启的脚本（宿主退出后仍存活） |
-| `restart.ps1` | 真正重启：校验进程路径 → 结束主进程 → 等待宿主优雅退出 → 启动应用 |
+| `restart.ps1` | 真正重启：校验进程路径 → 检查更新缓存（有更新的安装包则静默安装）→ 结束主进程 → 等待宿主优雅退出 → 启动应用 |
 | `cordis.patch.yml` | 插件加载条目 |
 | `locale/*.json` | 插件管理页显示用的标题/描述 |
 | `icon.svg` | 插件图标 |

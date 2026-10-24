@@ -4,3 +4,4 @@ orchestrator.log
 blocked.json
 client-report.log
 selftest/
+host-report.log

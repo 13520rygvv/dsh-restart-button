@@ -1,6 +1,6 @@
 {
   "name": "@local/dsh-restart-button",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "private": true,
   "type": "module",
   "description": "Adds a Restart button to Settings that restarts the DeepSeek Harness desktop app",

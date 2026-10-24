@@ -5,6 +5,13 @@
 # closing and shuts itself down through its normal graceful path, so session
 # logs are flushed before the application is started again.
 #
+# Restart doubles as "apply a downloaded update": DSH updates through
+# electron-updater, and a killed Electron shell bypasses its quitAndInstall
+# hook, so a downloaded update would otherwise stay pending forever. Before
+# relaunching, this helper inspects the updater cache; when it holds an
+# installer newer than the running application, that installer is run silently
+# instead of plain relaunching.
+#
 # Every attempt overwrites launch.log beside this script, which records the
 # decisions taken; a run that stops early names the reason there.
 param(
@@ -13,7 +20,10 @@ param(
   [Parameter(Mandatory = $true)][int]$HostPid,
   [int]$DelayMs = 900,
   [int]$HostExitMs = 20000,
-  [switch]$DryRun
+  [switch]$DryRun,
+  # Test hooks: force one installer path or one "running" version.
+  [string]$InstallerOverride,
+  [string]$AppVersionOverride
 )
 
 $ErrorActionPreference = 'Continue'
@@ -46,6 +56,140 @@ function Wait-Exit {
   }
   return -not (Test-Alive -Target $Target)
 }
+
+# --- update detection -------------------------------------------------------
+
+function Get-AutoUpdateDir {
+  $known = @(
+    (Join-Path $env:LOCALAPPDATA '@deepseek-aidsh-desktop-updater'),
+    (Join-Path $env:LOCALAPPDATA 'deepseek-harness-updater')
+  )
+  foreach ($dir in $known) {
+    if (Test-Path -LiteralPath (Join-Path $dir 'installer.exe')) { return $dir }
+  }
+  try {
+    $found = Get-ChildItem -LiteralPath $env:LOCALAPPDATA -Directory -Filter '*-updater' -ErrorAction Stop |
+      Where-Object { $_.Name -like '*deepseek*' } | Select-Object -First 1
+    if ($null -ne $found) { return $found.FullName }
+  } catch { }
+  return $null
+}
+
+function Read-AsarVersion {
+  param([string]$AsarPath)
+  try {
+    $fs = [IO.File]::OpenRead($AsarPath)
+    try {
+      $hdr = New-Object byte[] 16
+      [void]$fs.Read($hdr, 0, 16)
+      $pickle = [BitConverter]::ToUInt32($hdr, 4)
+      $jsonLen = [int][BitConverter]::ToUInt32($hdr, 8) - 4
+      $contentBase = 8 + [int64]$pickle
+      [void]$fs.Seek(16, 'Begin')
+      $json = New-Object byte[] $jsonLen
+      $read = 0
+      while ($read -lt $jsonLen) {
+        $n = $fs.Read($json, $read, $jsonLen - $read)
+        if ($n -le 0) { break }
+        $read += $n
+      }
+      $header = ([Text.Encoding]::UTF8.GetString($json)) | ConvertFrom-Json
+      $node = $header.files.dsh.files.'package.json'
+      if ($null -eq $node) { return $null }
+      [void]$fs.Seek($contentBase + [int64]$node.offset, 'Begin')
+      $buf = New-Object byte[] ([int]$node.size)
+      [void]$fs.Read($buf, 0, $buf.Length)
+      $match = [regex]::Match([Text.Encoding]::UTF8.GetString($buf), '"version"\s*:\s*"([^"]+)"')
+      if ($match.Success) { return $match.Groups[1].Value }
+      return $null
+    } finally { $fs.Dispose() }
+  } catch {
+    return $null
+  }
+}
+
+function Get-ExeVersion {
+  param([string]$ExePath)
+  try {
+    if (-not (Test-Path -LiteralPath $ExePath)) { return $null }
+    $info = (Get-Item -LiteralPath $ExePath).VersionInfo
+    if ($null -ne $info -and -not [string]::IsNullOrEmpty($info.ProductVersion)) { return $info.ProductVersion.Trim() }
+    if ($null -ne $info -and -not [string]::IsNullOrEmpty($info.FileVersion)) { return $info.FileVersion.Trim() }
+    return $null
+  } catch { return $null }
+}
+
+function Compare-PreRelease {
+  param([string]$Left, [string]$Right)
+  if ($Left -eq $Right) { return 0 }
+  if ([string]::IsNullOrEmpty($Left)) { return 1 }
+  if ([string]::IsNullOrEmpty($Right)) { return -1 }
+  $a = $Left.Split('.')
+  $b = $Right.Split('.')
+  $len = [Math]::Max($a.Count, $b.Count)
+  for ($i = 0; $i -lt $len; $i++) {
+    $x = if ($i -lt $a.Count) { $a[$i] } else { '' }
+    $y = if ($i -lt $b.Count) { $b[$i] } else { '' }
+    $nx = 0
+    $ny = 0
+    if ([int]::TryParse($x, [ref]$nx) -and [int]::TryParse($y, [ref]$ny)) {
+      if ($nx -gt $ny) { return 1 }
+      if ($nx -lt $ny) { return -1 }
+    } else {
+      $c = [string]::CompareOrdinal($x, $y)
+      if ($c -ne 0) { return $c }
+    }
+  }
+  return 0
+}
+
+function Compare-Version {
+  param([string]$Left, [string]$Right)
+  if ([string]::IsNullOrEmpty($Left) -or [string]::IsNullOrEmpty($Right)) { return 0 }
+  $leftParts = $Left.Trim().Split('-', 2)
+  $rightParts = $Right.Trim().Split('-', 2)
+  $leftNums = @($leftParts[0].Split('.') | ForEach-Object { $n = 0; if ([int]::TryParse($_, [ref]$n)) { $n } else { 0 } })
+  $rightNums = @($rightParts[0].Split('.') | ForEach-Object { $n = 0; if ([int]::TryParse($_, [ref]$n)) { $n } else { 0 } })
+  for ($i = 0; $i -lt 3; $i++) {
+    $l = if ($i -lt $leftNums.Count) { $leftNums[$i] } else { 0 }
+    $r = if ($i -lt $rightNums.Count) { $rightNums[$i] } else { 0 }
+    if ($l -gt $r) { return 1 }
+    if ($l -lt $r) { return -1 }
+  }
+  $leftPre = if ($leftParts.Count -gt 1) { $leftParts[1] } else { '' }
+  $rightPre = if ($rightParts.Count -gt 1) { $rightParts[1] } else { '' }
+  return Compare-PreRelease $leftPre $rightPre
+}
+
+function Resolve-Update {
+  param([string]$Executable, [string]$Installer)
+  $version = $AppVersionOverride
+  if ([string]::IsNullOrEmpty($version)) {
+    $version = Read-AsarVersion (Join-Path (Split-Path -Parent $Executable) 'resources\app.asar')
+  }
+  if ([string]::IsNullOrEmpty($Installer)) {
+    $dir = Get-AutoUpdateDir
+    if ($null -ne $dir) { $Installer = Join-Path $dir 'installer.exe' }
+  }
+  $installerVersion = $null
+  if (-not [string]::IsNullOrEmpty($Installer) -and (Test-Path -LiteralPath $Installer)) {
+    $installerVersion = Get-ExeVersion $Installer
+  } else {
+    $Installer = ''
+  }
+  $useInstaller = $false
+  if (-not [string]::IsNullOrEmpty($version) -and -not [string]::IsNullOrEmpty($installerVersion)) {
+    $useInstaller = (Compare-Version $installerVersion $version) -gt 0
+  }
+  return [pscustomobject]@{
+    AppVersion = $version
+    Installer = $Installer
+    InstallerVersion = $installerVersion
+    UseInstaller = $useInstaller
+  }
+}
+
+# --- main flow --------------------------------------------------------------
 
 Write-Log ('start dryRun={0} appExe="{1}" main={2} host={3}' -f $DryRun.IsPresent, $AppExe, $MainPid, $HostPid)
 Save-Log
@@ -85,8 +229,15 @@ if ($resolvedMain -ne $resolvedExe) {
   exit 0
 }
 
+# A bare kill skips electron-updater's quitAndInstall hook, so a downloaded
+# update would wait forever. Prefer the cached installer when it is newer.
+$update = Resolve-Update -Executable $AppExe -Installer $InstallerOverride
+$mode = if ($update.UseInstaller) { 'install-update' } else { 'plain-restart' }
+Write-Log ('update: app={0} installerVersion={1} installer="{2}" mode={3}' -f $update.AppVersion, $update.InstallerVersion, $update.Installer, $mode)
+Save-Log
+
 if ($DryRun.IsPresent) {
-  Write-Log 'dry run: checks passed, stopping here'
+  Write-Log ('dry run: checks passed, would {0}' -f $(if ($update.UseInstaller) { 'install the update' } else { 'plain restart' }))
   Save-Log
   exit 0
 }
@@ -109,10 +260,44 @@ if (-not $hostExited) {
 # Handles, sockets, and the profile lock need a moment to be released.
 Start-Sleep -Milliseconds 500
 
-try {
-  Start-Process -FilePath $AppExe -WorkingDirectory (Split-Path -Parent $AppExe) | Out-Null
-  Write-Log 'application started'
-} catch {
-  Write-Log ('failed to start the application: {0}' -f $_.Exception.Message)
+if ($update.UseInstaller) {
+  Write-Log ('starting update installer: {0}' -f $update.Installer)
+  Save-Log
+  try {
+    $installer = Start-Process -FilePath $update.Installer -ArgumentList '/S', '--updated' `
+      -WorkingDirectory (Split-Path -Parent $update.Installer) -PassThru -ErrorAction Stop
+    Write-Log ('installer pid={0}; waiting for it to finish' -f $installer.Id)
+    $finished = $installer.WaitForExit(120000)
+    if (-not $finished) {
+      Write-Log 'installer still running after 120s; leaving it to finish'
+      Save-Log
+      exit 0
+    }
+    Write-Log ('installer exit code={0}' -f $installer.ExitCode)
+    # The updater installer relaunches the app itself; keep a fallback for the
+    # case where it exits without starting anything.
+    Start-Sleep -Seconds 2
+    if (-not (Get-Process -Name 'DeepSeek Harness' -ErrorAction SilentlyContinue)) {
+      Start-Process -FilePath $AppExe -WorkingDirectory (Split-Path -Parent $AppExe) | Out-Null
+      Write-Log 'installer finished without launching; application started'
+    } else {
+      Write-Log 'application relaunched by the installer'
+    }
+  } catch {
+    Write-Log ('failed to run update installer: {0}' -f $_.Exception.Message)
+    try {
+      Start-Process -FilePath $AppExe -WorkingDirectory (Split-Path -Parent $AppExe) | Out-Null
+      Write-Log 'fallback: application started after installer failure'
+    } catch {
+      Write-Log ('failed to start the application: {0}' -f $_.Exception.Message)
+    }
+  }
+} else {
+  try {
+    Start-Process -FilePath $AppExe -WorkingDirectory (Split-Path -Parent $AppExe) | Out-Null
+    Write-Log 'application started'
+  } catch {
+    Write-Log ('failed to start the application: {0}' -f $_.Exception.Message)
+  }
 }
 Save-Log
