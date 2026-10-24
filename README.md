@@ -99,6 +99,14 @@ plugin_manager install_bundle  target = <本目录的绝对路径>
 
 - 补充「关于上传」一节，说明本仓库由 AI 助手代为创建、提交和推送。
 
+### 2026-10-24
+
+**重启顺带安装更新（`87934ac`）**
+
+- 重启前检查 electron-updater 的缓存（`%LOCALAPPDATA%\@deepseek-aidsh-desktop-updater\installer.exe`），读取 `resources\app.asar` 里的运行版本来比较；更新包版本更高时静默运行安装包（`/S --updated`）并重新启动，否则照旧重启。
+- 这样应用内更新下载完成后点重启就会装上，不再卡在「下载成功但装不上、得手动跑安装器」。
+- 顺手清理了排查期间留下的临时诊断代码（`host-report.log` 已加入忽略列表）。
+
 ### 早期开发中的两个问题（发布仓库前已修）
 
 - 用 `detached` 方式拉起 PowerShell 会让脚本直接退出、什么都不执行；改为由编排脚本通过 WMI 创建独立进程来执行重启。
