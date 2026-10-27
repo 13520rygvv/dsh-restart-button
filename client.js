@@ -47,6 +47,7 @@ window.__ModuleLoader__.load({
       'unsupported': '当前环境不支持一键重启，仅 Windows 桌面版可用。',
       'stalled': '重启没有完成，请重试或手动重启应用。',
       'shortcut.label': '重启 DeepSeek Harness',
+      'shortcut.reload.label': '重载窗口',
       'menu.restart': '重启',
     }
 
@@ -67,6 +68,7 @@ window.__ModuleLoader__.load({
       'unsupported': 'One-click restart is only available in the Windows desktop app.',
       'stalled': 'The restart did not complete. Try again, or restart the app manually.',
       'shortcut.label': 'Restart DeepSeek Harness',
+      'shortcut.reload.label': 'Reload window',
       'menu.restart': 'Restart',
     }
 
@@ -479,6 +481,31 @@ window.__ModuleLoader__.load({
             }), 'dsh-restart-button: restart shortcut')
           } catch (error) {
             console.warn('[dsh-restart-button] shortcut registration failed', error)
+          }
+          // The core build binds primary+R to `page.refresh`, which only refreshes
+          // the focused right-sidebar tab (and does nothing when none is focused).
+          // Reloading the whole window therefore gets its own non-conflicting key.
+          try {
+            ctx.effect(() => shortcuts.register({
+              id: 'dsh-restart-button.reload',
+              label: () => copy('shortcut.reload.label'),
+              aliases: ['reload', 'refresh-window'],
+              defaults: {
+                'desktop:windows': { code: 'KeyR', modifiers: ['primary', 'shift'] },
+                'desktop:macos': { code: 'KeyR', modifiers: ['primary', 'shift'] },
+                'desktop:linux': { code: 'KeyR', modifiers: ['primary', 'shift'] },
+              },
+              regions: ['page', 'editable', 'terminal'],
+              modals: ['settings', 'shortcuts'],
+              resolve: () => ({
+                status: 'handled',
+                run: () => {
+                  globalThis.location.reload()
+                },
+              }),
+            }), 'dsh-restart-button: reload shortcut')
+          } catch (error) {
+            console.warn('[dsh-restart-button] reload shortcut registration failed', error)
           }
         }
         const shortcuts = ctx.get('shortcuts')
